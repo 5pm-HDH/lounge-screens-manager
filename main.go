@@ -31,7 +31,9 @@ type PlaylistItem struct {
 	FilePath       string
 	OrigFilePath   string
 	RenderFinished bool
-	RenderCommand  *exec.Cmd
+	IsImage        bool
+	ImageDuration  string
+	RenderCommands []*exec.Cmd
 }
 
 func (pi *PlaylistItem) GetPath() string {
@@ -54,10 +56,13 @@ var (
 	weeklyEvents     []WeeklyEvent
 	standardPlaylist []*PlaylistItem
 
-	mpvPath    string
-	ffmpegPath string
-	configPath string
-	mosaicPath string
+	mpvPath     string
+	ffmpegPath  string
+	fehPath     string
+	convertPath string
+	mogrifyPath string
+	configPath  string
+	mosaicPath  string
 
 	renderQueue chan *PlaylistItem
 
@@ -87,6 +92,21 @@ func init() {
 	ffmpegPath, err = exec.LookPath("ffmpeg")
 	if err != nil {
 		log.Panicln("unable to find ffmpeg executable!")
+	}
+
+	fehPath, err = exec.LookPath("feh")
+	if err != nil {
+		log.Panicln("unable to find feh executable!")
+	}
+
+	mogrifyPath, err = exec.LookPath("mogrify")
+	if err != nil {
+		log.Panicln("unable to find mogrify executable!")
+	}
+
+	convertPath, err = exec.LookPath("convert")
+	if err != nil {
+		log.Panicln("unable to find convert executable!")
 	}
 
 	renderQueue = make(chan *PlaylistItem, 100)
@@ -128,14 +148,26 @@ func main() {
 	for {
 		playlist := selectCurrentPlaylist()
 		for _, i := range playlist {
-			ffplayCmd := exec.Cmd{
-				Path: mpvPath,
-				Args: []string{mpvPath, "--fs", "--hwdec=auto", i.GetPath()},
+			if i.IsImage {
+				fehCmd := exec.Cmd{
+					Path: fehPath,
+					Args: []string{fehPath, "-F", "-D", i.ImageDuration, "-Z", "--on-last-slide", "quit", i.GetPath()},
+				}
+				log.Printf("showing: %s", fehCmd.String())
+				if err := fehCmd.Run(); err != nil {
+					log.Printf("failed to show %s with error: %v", i.GetPath(), err)
+				}
+			} else {
+				mpvCmd := exec.Cmd{
+					Path: mpvPath,
+					Args: []string{mpvPath, "--fs", "--hwdec=auto", i.GetPath()},
+				}
+				log.Printf("playing: %s", mpvCmd.String())
+				if err := mpvCmd.Run(); err != nil {
+					log.Printf("failed to play %s with error: %v", i.GetPath(), err)
+				}
 			}
-			log.Printf("playing: %s", ffplayCmd.String())
-			if err := ffplayCmd.Run(); err != nil {
-				log.Printf("failed to play %s with error: %v", i.GetPath(), err)
-			}
+
 		}
 	}
 
@@ -147,8 +179,11 @@ func processRenderQueue() {
 		if pi.RenderFinished {
 			continue
 		}
-		if err := pi.RenderCommand.Run(); err != nil {
-			log.Printf("failed to convert media file %s, skipping due to error: %v", pi.OrigFilePath, err)
+		for _, rc := range pi.RenderCommands {
+			if err := rc.Run(); err != nil {
+				log.Printf("failed to convert media file %s, skipping due to error: %v", pi.OrigFilePath, err)
+				break
+			}
 		}
 		pi.RenderFinished = true
 	}
@@ -207,7 +242,7 @@ func listFilesInDirectory(configPath string) []string {
 	}
 	var filteredFiles []string
 	for _, file := range files {
-		if !strings.HasSuffix(file, ".mosaic.mov") {
+		if !strings.HasSuffix(file, ".mosaic.mov") && !strings.HasSuffix(file, ".mosaic.jpg") {
 			filteredFiles = append(filteredFiles, file)
 		}
 	}
@@ -220,8 +255,8 @@ func mediaDirectoryToPlaylist(mediaDir string) (playlist []*PlaylistItem) {
 	media.Sort()
 
 	for _, m := range media {
-		outPath := m + ".mosaic.mov"
 		if videoFileExpression.MatchString(m) {
+			outPath := m + ".mosaic.mov"
 			exists := false
 			if _, err := os.Stat(outPath); err == nil {
 				exists = true
@@ -231,40 +266,68 @@ func mediaDirectoryToPlaylist(mediaDir string) (playlist []*PlaylistItem) {
 				FilePath:       outPath,
 				OrigFilePath:   m,
 				RenderFinished: exists,
-				RenderCommand: &exec.Cmd{
+				IsImage:        false,
+				RenderCommands: []*exec.Cmd{{
 					Path:   ffmpegPath,
-					Args:   []string{ffmpegPath, "-n", "-i", m, "-i", m, "-i", m, "-filter_complex", ffmpegVideoToMosaicArg, "-map", "[out]", "-c:v", "mjpeg", "-q:v", "3", outPath},
+					Args:   []string{ffmpegPath, "-n", "-i", m, "-i", m, "-i", m, "-filter_complex", ffmpegVideoToMosaicArg, "-map", "[out]", "-c:v", "mjpeg", "-q:v", "3", "-r", "25", outPath},
 					Stdout: os.Stdout,
 					Stderr: os.Stderr,
-				},
+				}},
 			}
 			playlist = append(playlist, pi)
 			if !pi.RenderFinished {
 				renderQueue <- pi
 			}
 		} else if bannerVideoFileExpression.MatchString(m) {
-			playlist = append(playlist, &PlaylistItem{
-				FilePath:       m,
-				OrigFilePath:   m,
-				RenderFinished: true,
-				RenderCommand:  nil,
-			})
-		} else if bannerPictureFileExpression.MatchString(m) {
-			dur := bannerPictureFileExpression.FindStringSubmatch(m)[1]
+			outPath := m + ".mosaic.mov"
 			exists := false
 			if _, err := os.Stat(outPath); err == nil {
 				exists = true
-				log.Printf("no need to re-create video for banner picture %s", m)
+				log.Printf("no need to re-create video for banner video %s", m)
 			}
 			pi := &PlaylistItem{
 				FilePath:       outPath,
 				OrigFilePath:   m,
 				RenderFinished: exists,
-				RenderCommand: &exec.Cmd{
+				IsImage:        false,
+				RenderCommands: []*exec.Cmd{{
 					Path:   ffmpegPath,
-					Args:   []string{ffmpegPath, "-n", "-loop", "1", "-i", m, "-c:v", "mjpeg", "-q:v", "3", "-t", dur, "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1:color=black", outPath},
+					Args:   []string{ffmpegPath, "-n", "-i", m, "-c:v", "mjpeg", "-q:v", "3", "-r", "25", "-vf", "scale=5760:1080:force_original_aspect_ratio=decrease,pad=5760:1080:-1:-1:color=black", outPath},
 					Stdout: os.Stdout,
 					Stderr: os.Stderr,
+				}},
+			}
+			playlist = append(playlist, pi)
+			if !pi.RenderFinished {
+				renderQueue <- pi
+			}
+		} else if bannerPictureFileExpression.MatchString(m) {
+			outPath := m + ".mosaic.jpg"
+			dur := bannerPictureFileExpression.FindStringSubmatch(m)[1]
+			exists := false
+			if _, err := os.Stat(outPath); err == nil {
+				exists = true
+				log.Printf("no need to re-size banner picture %s", m)
+			}
+			pi := &PlaylistItem{
+				FilePath:       outPath,
+				OrigFilePath:   m,
+				RenderFinished: exists,
+				IsImage:        true,
+				ImageDuration:  dur,
+				RenderCommands: []*exec.Cmd{
+					{
+						Path:   mogrifyPath,
+						Args:   []string{mogrifyPath, "-scale", "5760x1080", "-background", "black", "-extent", "5760x1080", "-gravity", "center", m},
+						Stdout: os.Stdout,
+						Stderr: os.Stderr,
+					},
+					{
+						Path:   convertPath,
+						Args:   []string{convertPath, m, "-format", "jpg", outPath},
+						Stdout: os.Stdout,
+						Stderr: os.Stderr,
+					},
 				},
 			}
 			playlist = append(playlist, pi)
@@ -272,6 +335,7 @@ func mediaDirectoryToPlaylist(mediaDir string) (playlist []*PlaylistItem) {
 				renderQueue <- pi
 			}
 		} else if pictureFileExpression.MatchString(m) {
+			outPath := m + ".mosaic.jpg"
 			dur := pictureFileExpression.FindStringSubmatch(m)[1]
 			exists := false
 			if _, err := os.Stat(outPath); err == nil {
@@ -282,11 +346,21 @@ func mediaDirectoryToPlaylist(mediaDir string) (playlist []*PlaylistItem) {
 				FilePath:       outPath,
 				OrigFilePath:   m,
 				RenderFinished: exists,
-				RenderCommand: &exec.Cmd{
-					Path:   ffmpegPath,
-					Args:   []string{ffmpegPath, "-n", "-loop", "1", "-i", m, "-loop", "1", "-i", m, "-loop", "1", "-i", m, "-filter_complex", ffmpegVideoToMosaicArg, "-map", "[out]", "-c:v", "mjpeg", "-q:v", "3", "-t", dur, outPath},
-					Stdout: os.Stdout,
-					Stderr: os.Stderr,
+				IsImage:        true,
+				ImageDuration:  dur,
+				RenderCommands: []*exec.Cmd{
+					{
+						Path:   mogrifyPath,
+						Args:   []string{mogrifyPath, "-scale", "1920x1080", "-background", "black", "-extent", "1920x1080", "-gravity", "center", m},
+						Stdout: os.Stdout,
+						Stderr: os.Stderr,
+					},
+					{
+						Path:   convertPath,
+						Args:   []string{convertPath, m, m, m, "+append", "-format", "jpg", outPath},
+						Stdout: os.Stdout,
+						Stderr: os.Stderr,
+					},
 				},
 			}
 			playlist = append(playlist, pi)
