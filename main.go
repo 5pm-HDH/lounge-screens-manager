@@ -192,11 +192,15 @@ func processRenderQueue() {
 func scanConfigPath(configPath string) {
 	reloadMutex.Lock()
 	defer reloadMutex.Unlock()
+	files := listFilesInDirectory(configPath)
+	for _, f := range files {
+		if f == "syncInProgress.lock" {
+			return
+		}
+	}
 
 	onceEvents = nil
 	weeklyEvents = nil
-
-	files := listFilesInDirectory(configPath)
 
 	for _, f := range files {
 		if strings.HasSuffix(f, "once") {
