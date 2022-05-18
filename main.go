@@ -54,7 +54,7 @@ var (
 	weeklyEvents     []WeeklyEvent
 	standardPlaylist []*PlaylistItem
 
-	ffplayPath string
+	mpvPath    string
 	ffmpegPath string
 	configPath string
 	mosaicPath string
@@ -79,9 +79,9 @@ func init() {
 	bannerVideoFileExpression = regexp.MustCompile("[0-9][0-9]-banner-video")
 
 	var err error
-	ffplayPath, err = exec.LookPath("ffplay")
+	mpvPath, err = exec.LookPath("mpv")
 	if err != nil {
-		log.Panicln("unable to find ffplay executable!")
+		log.Panicln("unable to find mpv executable!")
 	}
 
 	ffmpegPath, err = exec.LookPath("ffmpeg")
@@ -129,8 +129,8 @@ func main() {
 		playlist := selectCurrentPlaylist()
 		for _, i := range playlist {
 			ffplayCmd := exec.Cmd{
-				Path: ffplayPath,
-				Args: []string{ffplayPath, "-fs", "-autoexit", i.GetPath()},
+				Path: mpvPath,
+				Args: []string{mpvPath, "--fs", "--hwdec=auto", i.GetPath()},
 			}
 			log.Printf("playing: %s", ffplayCmd.String())
 			if err := ffplayCmd.Run(); err != nil {
