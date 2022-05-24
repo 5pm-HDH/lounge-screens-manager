@@ -143,8 +143,10 @@ func main() {
 	defer close(cleanupOrphansQueue)
 
 	scanConfigPath()
+
+	ticker := time.NewTimer(5 * time.Minute)
 	go func() {
-		for range time.NewTimer(time.Minute).C {
+		for range ticker.C {
 			syncFromOneDrive()
 			scanConfigPath()
 		}
