@@ -3,9 +3,8 @@ Description=lounge screen manager
 
 [Service]
 ExecStart=/usr/local/bin/lsm
-WorkingDirectory=/home/lounge-screens/
+WorkingDirectory=/home/lsm/
 Restart=always
 Environment="ONEDRIVE_PATH=/home/lsm/onedrive/"
-Environment="MOSAIC_PATH=/home/lsm/mosaic/"
 Environment="DISPLAY=:0"
 Environment="XAUTHORITY=/home/lsm/.Xauthority"

@@ -61,10 +61,13 @@ var (
 	fehPath     string
 	convertPath string
 	mogrifyPath string
-	configPath  string
-	mosaicPath  string
+	rclonePath  string
 
-	renderQueue chan *PlaylistItem
+	configPath string
+
+	videoRenderQueue     chan *PlaylistItem
+	imageProcessingQueue chan *PlaylistItem
+	cleanupOrphansQueue  chan string
 
 	reloadMutex *sync.Mutex
 )
@@ -109,7 +112,14 @@ func init() {
 		log.Panicln("unable to find convert executable!")
 	}
 
-	renderQueue = make(chan *PlaylistItem, 100)
+	rclonePath, err = exec.LookPath("rclone")
+	if err != nil {
+		log.Panicln("unable to find rclone executable!")
+	}
+
+	videoRenderQueue = make(chan *PlaylistItem, 100)
+	imageProcessingQueue = make(chan *PlaylistItem, 100)
+	cleanupOrphansQueue = make(chan string, 10)
 	reloadMutex = &sync.Mutex{}
 }
 
@@ -125,23 +135,18 @@ func main() {
 		return
 	}
 
-	if len(os.Getenv("MOSAIC_PATH")) == 0 {
-		log.Panicln("please set the MOSAIC_PATH env")
-		return
-	}
-	mosaicPath = os.Getenv("MOSAIC_PATH")
+	go processVideoRenderQueue()
+	defer close(videoRenderQueue)
+	go processImageQueue()
+	defer close(imageProcessingQueue)
+	go cleanupOrphans()
+	defer close(cleanupOrphansQueue)
 
-	if _, err := os.Stat(mosaicPath); os.IsNotExist(err) {
-		log.Panicln("the provided MOSAIC_PATH does not exist!")
-		return
-	}
-
-	go processRenderQueue()
-
-	scanConfigPath(configPath)
+	scanConfigPath()
 	go func() {
 		for range time.NewTimer(time.Minute).C {
-			scanConfigPath(configPath)
+			syncFromOneDrive()
+			scanConfigPath()
 		}
 	}()
 
@@ -151,7 +156,7 @@ func main() {
 			if i.IsImage {
 				fehCmd := exec.Cmd{
 					Path: fehPath,
-					Args: []string{fehPath, "-F", "-D", i.ImageDuration, "-Z", "--on-last-slide", "quit", i.GetPath()},
+					Args: []string{fehPath, "-F", "-Y", "-D", i.ImageDuration, "-Z", "--on-last-slide", "quit", i.GetPath()},
 				}
 				log.Printf("showing: %s", fehCmd.String())
 				if err := fehCmd.Run(); err != nil {
@@ -165,23 +170,26 @@ func main() {
 				log.Printf("playing: %s", mpvCmd.String())
 				if err := mpvCmd.Run(); err != nil {
 					log.Printf("failed to play %s with error: %v", i.GetPath(), err)
+					if i.RenderFinished {
+						log.Printf("deleting rendered video %s because it failed to play, retriggering render - %v", i.GetPath(), os.Remove(i.GetPath()))
+						i.RenderFinished = false
+						videoRenderQueue <- i
+					}
 				}
 			}
 
 		}
 	}
-
-	close(renderQueue)
 }
 
-func processRenderQueue() {
-	for pi := range renderQueue {
+func processVideoRenderQueue() {
+	for pi := range videoRenderQueue {
 		if pi.RenderFinished {
 			continue
 		}
 		for _, rc := range pi.RenderCommands {
 			if err := rc.Run(); err != nil {
-				log.Printf("failed to convert media file %s, skipping due to error: %v", pi.OrigFilePath, err)
+				log.Printf("failed to convert video file %s, skipping due to error: %v", pi.OrigFilePath, err)
 				break
 			}
 		}
@@ -189,7 +197,39 @@ func processRenderQueue() {
 	}
 }
 
-func scanConfigPath(configPath string) {
+func processImageQueue() {
+	for pi := range imageProcessingQueue {
+		if pi.RenderFinished {
+			continue
+		}
+		for _, rc := range pi.RenderCommands {
+			if err := rc.Run(); err != nil {
+				log.Printf("failed to convert image file %s, skipping due to error: %v", pi.OrigFilePath, err)
+				break
+			}
+		}
+		pi.RenderFinished = true
+	}
+}
+
+func cleanupOrphans() {
+	for o := range cleanupOrphansQueue {
+		log.Printf("removing orphaned rendered file: %s, with error: %v", o, os.Remove(o))
+	}
+}
+
+func syncFromOneDrive() {
+	rcloneCmd := exec.Cmd{
+		Path: rclonePath,
+		Args: []string{rclonePath, "sync", "--exclude=*.mosaic.*", "onedrive:/lsm/", configPath},
+	}
+	log.Printf("syncing from onedrive: %s", rcloneCmd.String())
+	if err := rcloneCmd.Run(); err != nil {
+		log.Printf("failed to sync from onedrive with error: %v", err)
+	}
+}
+
+func scanConfigPath() {
 	reloadMutex.Lock()
 	defer reloadMutex.Unlock()
 	files := listFilesInDirectory(configPath)
@@ -246,7 +286,17 @@ func listFilesInDirectory(configPath string) []string {
 	}
 	var filteredFiles []string
 	for _, file := range files {
-		if !strings.HasSuffix(file, ".mosaic.mov") && !strings.HasSuffix(file, ".mosaic.jpg") {
+		if strings.HasSuffix(file, ".mosaic.mov") {
+			_, err := os.Stat(strings.TrimSuffix(file, ".mosaic.mov"))
+			if os.IsNotExist(err) {
+				cleanupOrphansQueue <- file
+			}
+		} else if strings.HasSuffix(file, ".mosaic.jpg") {
+			_, err := os.Stat(strings.TrimSuffix(file, ".mosaic.jpg"))
+			if os.IsNotExist(err) {
+				cleanupOrphansQueue <- file
+			}
+		} else {
 			filteredFiles = append(filteredFiles, file)
 		}
 	}
@@ -280,7 +330,7 @@ func mediaDirectoryToPlaylist(mediaDir string) (playlist []*PlaylistItem) {
 			}
 			playlist = append(playlist, pi)
 			if !pi.RenderFinished {
-				renderQueue <- pi
+				videoRenderQueue <- pi
 			}
 		} else if bannerVideoFileExpression.MatchString(m) {
 			outPath := m + ".mosaic.mov"
@@ -303,7 +353,7 @@ func mediaDirectoryToPlaylist(mediaDir string) (playlist []*PlaylistItem) {
 			}
 			playlist = append(playlist, pi)
 			if !pi.RenderFinished {
-				renderQueue <- pi
+				videoRenderQueue <- pi
 			}
 		} else if bannerPictureFileExpression.MatchString(m) {
 			outPath := m + ".mosaic.jpg"
@@ -336,7 +386,7 @@ func mediaDirectoryToPlaylist(mediaDir string) (playlist []*PlaylistItem) {
 			}
 			playlist = append(playlist, pi)
 			if !pi.RenderFinished {
-				renderQueue <- pi
+				imageProcessingQueue <- pi
 			}
 		} else if pictureFileExpression.MatchString(m) {
 			outPath := m + ".mosaic.jpg"
@@ -369,7 +419,7 @@ func mediaDirectoryToPlaylist(mediaDir string) (playlist []*PlaylistItem) {
 			}
 			playlist = append(playlist, pi)
 			if !pi.RenderFinished {
-				renderQueue <- pi
+				imageProcessingQueue <- pi
 			}
 		} else {
 			log.Printf("skipping invalid file: %s", m)
