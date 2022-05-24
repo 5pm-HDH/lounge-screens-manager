@@ -144,13 +144,14 @@ func main() {
 
 	scanConfigPath()
 
+	// TODO: use cron
 	go func() {
 		for {
 			syncFromOneDrive()
 			scanConfigPath()
 			log.Println("finished sync")
 			log.Println("waiting for tick")
-			time.Sleep(120 * time.Second)
+			time.Sleep(30 * time.Second)
 			log.Println("tick")
 		}
 	}()
