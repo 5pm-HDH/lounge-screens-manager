@@ -144,11 +144,14 @@ func main() {
 
 	scanConfigPath()
 
-	ticker := time.NewTimer(5 * time.Minute)
 	go func() {
-		for range ticker.C {
+		for {
 			syncFromOneDrive()
 			scanConfigPath()
+			log.Println("finished sync")
+			log.Println("waiting for tick")
+			time.Sleep(120 * time.Second)
+			log.Println("tick")
 		}
 	}()
 
