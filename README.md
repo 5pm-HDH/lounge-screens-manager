@@ -48,3 +48,7 @@ Video behaves the same as Bild, however it does not require a display length.
 E.g. '03-video test.mp4' for videos meant to be displayed on a singular screen and '04-banner-video test.mp4' for videos which should span across all three screens.
 The application will render it to be displayed on all three screens in the background.
 Until it is finished processing, the video will only be shown on the center monitor.
+
+## Fixing errors / replacing files
+If there is an error in one of the files, or you want to replace an image, delete the old file and upload the fixed file USING A DIFFERENT NAME.
+Otherwise, the fixed version might not get synchronized.
