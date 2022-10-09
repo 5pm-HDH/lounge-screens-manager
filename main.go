@@ -298,7 +298,7 @@ func scanConfigPath() {
 		} else if strings.HasSuffix(f, "standard") {
 			standardPlaylist = mediaDirectoryToPlaylist(f)
 		} else {
-			fmt.Printf("ignoring directory/file: %s", f)
+			fmt.Printf("ignoring directory/file: %s\n", f)
 		}
 	}
 }
