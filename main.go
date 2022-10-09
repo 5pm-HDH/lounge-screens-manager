@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,7 +65,8 @@ var (
 	mogrifyPath string
 	rclonePath  string
 
-	configPath string
+	configPath   string
+	lanSwitchUrl string
 
 	videoRenderQueue     chan *PlaylistItem
 	imageProcessingQueue chan *PlaylistItem
@@ -135,6 +138,12 @@ func main() {
 		return
 	}
 
+	if len(os.Getenv("LAN_SWITCH_URL")) == 0 {
+		log.Panicln("please set the LAN_SWITCH_URL env")
+		return
+	}
+	lanSwitchUrl = os.Getenv("LAN_SWITCH_URL")
+
 	go processVideoRenderQueue()
 	defer close(videoRenderQueue)
 	go processImageQueue()
@@ -150,9 +159,9 @@ func main() {
 			syncFromOneDrive()
 			scanConfigPath()
 			log.Println("finished sync")
-			log.Println("waiting for tick")
+			// log.Println("waiting for tick")
 			time.Sleep(30 * time.Second)
-			log.Println("tick")
+			// log.Println("tick")
 		}
 	}()
 
@@ -160,11 +169,20 @@ func main() {
 		playlist := selectCurrentPlaylist()
 		for _, i := range playlist {
 			if i.IsImage {
+				fehBgCommand := exec.Cmd{
+					Path: fehPath,
+					Args: []string{fehPath, "--bg-max", "--no-fehbg", i.GetPath()},
+				}
+				// log.Printf("showing: %s", fehBgCommand.String())
+				if err := fehBgCommand.Run(); err != nil {
+					log.Printf("failed to set %s as bg with error: %v", i.GetPath(), err)
+				}
+
 				fehCmd := exec.Cmd{
 					Path: fehPath,
 					Args: []string{fehPath, "-F", "-Y", "-D", i.ImageDuration, "-Z", "--on-last-slide", "quit", i.GetPath()},
 				}
-				log.Printf("showing: %s", fehCmd.String())
+				// log.Printf("showing: %s", fehCmd.String())
 				if err := fehCmd.Run(); err != nil {
 					log.Printf("failed to show %s with error: %v", i.GetPath(), err)
 				}
@@ -173,7 +191,7 @@ func main() {
 					Path: mpvPath,
 					Args: []string{mpvPath, "--fs", "--hwdec=auto", i.GetPath()},
 				}
-				log.Printf("playing: %s", mpvCmd.String())
+				// log.Printf("playing: %s", mpvCmd.String())
 				if err := mpvCmd.Run(); err != nil {
 					log.Printf("failed to play %s with error: %v", i.GetPath(), err)
 					if i.RenderFinished {
@@ -186,6 +204,25 @@ func main() {
 
 		}
 	}
+}
+
+func switchMonitors(desiredState int) error {
+	resp, err := http.Get(fmt.Sprintf("%s/xml/jsonswitch.php?id=1&set=%d", lanSwitchUrl, desiredState))
+	if err != nil {
+		return err
+	}
+
+	var switchResp LanSwitchResponse
+	err = json.NewDecoder(resp.Body).Decode(&switchResp)
+	if err != nil {
+		return err
+	}
+
+	if switchResp.Result.Error != 0 {
+		return fmt.Errorf("failed to turn on switch: %d", switchResp.Result.Error)
+	}
+
+	return nil
 }
 
 func processVideoRenderQueue() {
@@ -229,7 +266,7 @@ func syncFromOneDrive() {
 		Path: rclonePath,
 		Args: []string{rclonePath, "sync", "--exclude=*.mosaic.*", "onedrive:/lsm/", configPath},
 	}
-	log.Printf("syncing from onedrive: %s", rcloneCmd.String())
+	// log.Printf("syncing from onedrive: %s", rcloneCmd.String())
 	if err := rcloneCmd.Run(); err != nil {
 		log.Printf("failed to sync from onedrive with error: %v", err)
 	}
@@ -270,6 +307,10 @@ func selectCurrentPlaylist() []*PlaylistItem {
 	now, _ = time.Parse("2006-01-02 15:04", nowNoZone)
 	for _, e := range onceEvents {
 		if now.After(e.Start) && now.Before(e.End) {
+			err := switchMonitors(1)
+			if err != nil {
+				log.Println(err)
+			}
 			return e.Playlist
 		}
 	}
@@ -277,9 +318,17 @@ func selectCurrentPlaylist() []*PlaylistItem {
 	for _, e := range weeklyEvents {
 		if int(now.Weekday()) == e.WeekDay {
 			if now.Hour() >= e.StartTime && now.Hour() < e.EndTime {
+				err := switchMonitors(1)
+				if err != nil {
+					log.Println(err)
+				}
 				return e.Playlist
 			}
 		}
+	}
+	err := switchMonitors(0)
+	if err != nil {
+		log.Println(err)
 	}
 	return standardPlaylist
 }
@@ -320,7 +369,7 @@ func mediaDirectoryToPlaylist(mediaDir string) (playlist []*PlaylistItem) {
 			exists := false
 			if _, err := os.Stat(outPath); err == nil {
 				exists = true
-				log.Printf("no need to re-create mosaic for video %s", m)
+				// log.Printf("no need to re-create mosaic for video %s", m)
 			}
 			pi := &PlaylistItem{
 				FilePath:       outPath,
@@ -343,7 +392,7 @@ func mediaDirectoryToPlaylist(mediaDir string) (playlist []*PlaylistItem) {
 			exists := false
 			if _, err := os.Stat(outPath); err == nil {
 				exists = true
-				log.Printf("no need to re-create video for banner video %s", m)
+				// log.Printf("no need to re-create video for banner video %s", m)
 			}
 			pi := &PlaylistItem{
 				FilePath:       outPath,
@@ -367,7 +416,7 @@ func mediaDirectoryToPlaylist(mediaDir string) (playlist []*PlaylistItem) {
 			exists := false
 			if _, err := os.Stat(outPath); err == nil {
 				exists = true
-				log.Printf("no need to re-size banner picture %s", m)
+				// log.Printf("no need to re-size banner picture %s", m)
 			}
 			pi := &PlaylistItem{
 				FilePath:       outPath,
@@ -400,7 +449,7 @@ func mediaDirectoryToPlaylist(mediaDir string) (playlist []*PlaylistItem) {
 			exists := false
 			if _, err := os.Stat(outPath); err == nil {
 				exists = true
-				log.Printf("no need to re-create mosaic video for picture %s", m)
+				// log.Printf("no need to re-create mosaic video for picture %s", m)
 			}
 			pi := &PlaylistItem{
 				FilePath:       outPath,
