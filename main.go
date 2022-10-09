@@ -138,11 +138,13 @@ func main() {
 		return
 	}
 
-	if len(os.Getenv("LAN_SWITCH_URL")) == 0 {
-		log.Panicln("please set the LAN_SWITCH_URL env")
-		return
+	if os.Getenv("USE_SWITCH") == "true" {
+		if len(os.Getenv("LAN_SWITCH_URL")) == 0 {
+			log.Panicln("please set the LAN_SWITCH_URL env")
+			return
+		}
+		lanSwitchUrl = os.Getenv("LAN_SWITCH_URL")
 	}
-	lanSwitchUrl = os.Getenv("LAN_SWITCH_URL")
 
 	go processVideoRenderQueue()
 	defer close(videoRenderQueue)
@@ -207,6 +209,9 @@ func main() {
 }
 
 func switchMonitors(desiredState int) error {
+	if os.Getenv("USE_SWITCH") != "true" {
+		return nil
+	}
 	resp, err := http.Get(fmt.Sprintf("%s/xml/jsonswitch.php?id=1&set=%d", lanSwitchUrl, desiredState))
 	if err != nil {
 		return err
