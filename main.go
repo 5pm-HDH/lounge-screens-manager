@@ -73,6 +73,8 @@ var (
 	cleanupOrphansQueue  chan string
 
 	reloadMutex *sync.Mutex
+
+	localOnly = false
 )
 
 const (
@@ -133,6 +135,14 @@ func main() {
 	}
 	configPath = os.Getenv("ONEDRIVE_PATH")
 
+	now := time.Now()
+	f, err := os.OpenFile(fmt.Sprintf("%s/log/%s_%s.log", configPath, now.Format(time.DateOnly), strings.ReplaceAll(now.Format(time.TimeOnly), ":", "-")), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+	if err != nil {
+		log.Panicln(err)
+	}
+	defer f.Close()
+	log.SetOutput(f)
+
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		log.Panicln("the provided ONEDRIVE_PATH does not exist!")
 		return
@@ -144,6 +154,11 @@ func main() {
 			return
 		}
 		lanSwitchUrl = os.Getenv("LAN_SWITCH_URL")
+	}
+
+	if os.Getenv("LOCAL_ONLY") == "true" {
+		log.Println("not syncing from onedrive")
+		localOnly = true
 	}
 
 	go processVideoRenderQueue()
@@ -160,7 +175,7 @@ func main() {
 		for {
 			syncFromOneDrive()
 			scanConfigPath()
-			log.Println("finished sync")
+			// log.Println("finished sync")
 			// log.Println("waiting for tick")
 			time.Sleep(30 * time.Second)
 			// log.Println("tick")
@@ -168,16 +183,22 @@ func main() {
 	}()
 
 	for {
-		playlist := selectCurrentPlaylist()
+		playlist, end := selectCurrentPlaylist()
 		for _, i := range playlist {
+			now := time.Now()
+			if now.After(end) {
+				break
+			}
 			if i.IsImage {
-				fehBgCommand := exec.Cmd{
-					Path: fehPath,
-					Args: []string{fehPath, "--bg-max", "--no-fehbg", i.GetPath()},
-				}
-				// log.Printf("showing: %s", fehBgCommand.String())
-				if err := fehBgCommand.Run(); err != nil {
-					log.Printf("failed to set %s as bg with error: %v", i.GetPath(), err)
+				if !localOnly {
+					fehBgCommand := exec.Cmd{
+						Path: fehPath,
+						Args: []string{fehPath, "--bg-max", "--no-fehbg", i.GetPath()},
+					}
+					// log.Printf("showing: %s", fehBgCommand.String())
+					if err := fehBgCommand.Run(); err != nil {
+						log.Printf("failed to set %s as bg with error: %v\n", i.GetPath(), err)
+					}
 				}
 
 				fehCmd := exec.Cmd{
@@ -186,7 +207,7 @@ func main() {
 				}
 				// log.Printf("showing: %s", fehCmd.String())
 				if err := fehCmd.Run(); err != nil {
-					log.Printf("failed to show %s with error: %v", i.GetPath(), err)
+					log.Printf("failed to show %s with error: %v\n", i.GetPath(), err)
 				}
 			} else {
 				mpvCmd := exec.Cmd{
@@ -195,9 +216,9 @@ func main() {
 				}
 				// log.Printf("playing: %s", mpvCmd.String())
 				if err := mpvCmd.Run(); err != nil {
-					log.Printf("failed to play %s with error: %v", i.GetPath(), err)
+					log.Printf("failed to play %s with error: %v\n", i.GetPath(), err)
 					if i.RenderFinished {
-						log.Printf("deleting rendered video %s because it failed to play, retriggering render - %v", i.GetPath(), os.Remove(i.GetPath()))
+						log.Printf("deleting rendered video %s because it failed to play, retriggering render - %v\n", i.GetPath(), os.Remove(i.GetPath()))
 						i.RenderFinished = false
 						videoRenderQueue <- i
 					}
@@ -223,8 +244,10 @@ func switchMonitors(desiredState int) error {
 		return err
 	}
 
+	log.Printf("toggle response: %v - desired state: %d\n", switchResp, desiredState)
+
 	if switchResp.Result.Error != 0 {
-		return fmt.Errorf("failed to turn on switch: %d", switchResp.Result.Error)
+		return fmt.Errorf("failed to toggle switch: %d\n", switchResp.Result.Error)
 	}
 
 	return nil
@@ -237,7 +260,7 @@ func processVideoRenderQueue() {
 		}
 		for _, rc := range pi.RenderCommands {
 			if err := rc.Run(); err != nil {
-				log.Printf("failed to convert video file %s, skipping due to error: %v", pi.OrigFilePath, err)
+				log.Printf("failed to convert video file %s, skipping due to error: %v\n", pi.OrigFilePath, err)
 				break
 			}
 		}
@@ -252,7 +275,7 @@ func processImageQueue() {
 		}
 		for _, rc := range pi.RenderCommands {
 			if err := rc.Run(); err != nil {
-				log.Printf("failed to convert image file %s, skipping due to error: %v", pi.OrigFilePath, err)
+				log.Printf("failed to convert image file %s, skipping due to error: %v\n", pi.OrigFilePath, err)
 				break
 			}
 		}
@@ -262,18 +285,30 @@ func processImageQueue() {
 
 func cleanupOrphans() {
 	for o := range cleanupOrphansQueue {
-		log.Printf("removing orphaned rendered file: %s, with error: %v", o, os.Remove(o))
+		log.Printf("removing orphaned rendered file: %s, with error: %v\n", o, os.Remove(o))
 	}
 }
 
 func syncFromOneDrive() {
+	if localOnly {
+		return
+	}
 	rcloneCmd := exec.Cmd{
 		Path: rclonePath,
-		Args: []string{rclonePath, "sync", "--exclude=*.mosaic.*", "onedrive:/lsm/", configPath},
+		Args: []string{rclonePath, "sync", "--exclude=*.mosaic.*", "--exclude=Z-Archiv", "onedrive:/lsm/", configPath},
 	}
 	// log.Printf("syncing from onedrive: %s", rcloneCmd.String())
 	if err := rcloneCmd.Run(); err != nil {
-		log.Printf("failed to sync from onedrive with error: %v", err)
+		log.Printf("failed to sync from onedrive with error: %v\n", err)
+	}
+
+	logCmd := exec.Cmd{
+		Path: rclonePath,
+		Args: []string{rclonePath, "sync", configPath + "/log", "onedrive:/lsm/log"},
+	}
+	// log.Printf("syncing from onedrive: %s", rcloneCmd.String())
+	if err := logCmd.Run(); err != nil {
+		log.Printf("failed to sync logs to onedrive with error: %v\n", err)
 	}
 }
 
@@ -297,13 +332,15 @@ func scanConfigPath() {
 			parseWeeklyEntries(f)
 		} else if strings.HasSuffix(f, "standard") {
 			standardPlaylist = mediaDirectoryToPlaylist(f)
+		} else if strings.HasSuffix(f, "log") {
+			continue
 		} else {
-			fmt.Printf("ignoring directory/file: %s\n", f)
+			log.Printf("ignoring directory/file: %s\n", f)
 		}
 	}
 }
 
-func selectCurrentPlaylist() []*PlaylistItem {
+func selectCurrentPlaylist() ([]*PlaylistItem, time.Time) {
 	reloadMutex.Lock()
 	defer reloadMutex.Unlock()
 
@@ -316,7 +353,7 @@ func selectCurrentPlaylist() []*PlaylistItem {
 			if err != nil {
 				log.Println(err)
 			}
-			return e.Playlist
+			return e.Playlist, e.End
 		}
 	}
 
@@ -327,7 +364,9 @@ func selectCurrentPlaylist() []*PlaylistItem {
 				if err != nil {
 					log.Println(err)
 				}
-				return e.Playlist
+
+				end, _ := time.Parse("2006-1-2 15:04", fmt.Sprintf("%d-%d-%d %d:00", now.Year(), int(now.Month()), now.Day(), e.EndTime))
+				return e.Playlist, end
 			}
 		}
 	}
@@ -335,13 +374,13 @@ func selectCurrentPlaylist() []*PlaylistItem {
 	if err != nil {
 		log.Println(err)
 	}
-	return standardPlaylist
+	return standardPlaylist, now.Add(30 * time.Second)
 }
 
 func listFilesInDirectory(configPath string) []string {
 	files, err := filepath.Glob(strings.TrimSuffix(configPath, "/") + "/*")
 	if err != nil {
-		log.Panicf("error: %v", err)
+		log.Panicf("error: %v\n", err)
 		return nil
 	}
 	var filteredFiles []string
@@ -482,7 +521,7 @@ func mediaDirectoryToPlaylist(mediaDir string) (playlist []*PlaylistItem) {
 				imageProcessingQueue <- pi
 			}
 		} else {
-			log.Printf("skipping invalid file: %s", m)
+			log.Printf("skipping invalid file: %s\n", m)
 		}
 	}
 
@@ -494,7 +533,7 @@ func parseOnceEntries(onceDir string) {
 	for _, f := range dates {
 		dayMatch := onceEventFolderExpression.MatchString(f)
 		if !dayMatch {
-			log.Printf("skipping malformatted directory: %s", f)
+			log.Printf("skipping malformatted directory: %s\n", f)
 			continue
 		}
 		day := onceEventFolderExpression.FindStringSubmatch(f)[0]
@@ -505,7 +544,7 @@ func parseOnceEntries(onceDir string) {
 
 			timeMatch := timeRangeFolderExpression.MatchString(strippedT)
 			if !timeMatch {
-				log.Printf("skipping malformatted directory: %s", strippedT)
+				log.Printf("skipping malformatted directory: %s\n", strippedT)
 				continue
 			}
 
@@ -515,7 +554,7 @@ func parseOnceEntries(onceDir string) {
 			endTime, _ := time.Parse("2006-01-02 15", day+" "+timeRangeParts[1])
 
 			if endTime.Before(time.Now()) {
-				log.Printf("skipping past event: %s", endTime.Format(time.RFC3339))
+				log.Printf("skipping past event: %s\n", endTime.Format(time.RFC3339))
 				continue
 			}
 
@@ -533,7 +572,7 @@ func parseWeeklyEntries(weeklyDir string) {
 	for _, wd := range weekDays {
 		weekDayMatch := weeklyEventFolderExpression.MatchString(wd)
 		if !weekDayMatch {
-			log.Printf("skipping malformatted directory: %s", wd)
+			log.Printf("skipping malformatted directory: %s\n", wd)
 			continue
 		}
 		weekDay, _ := strconv.Atoi(weeklyEventFolderExpression.FindStringSubmatch(wd)[0])
@@ -544,7 +583,7 @@ func parseWeeklyEntries(weeklyDir string) {
 
 			timeMatch := timeRangeFolderExpression.MatchString(strippedT)
 			if !timeMatch {
-				log.Printf("skipping malformatted directory: %s", strippedT)
+				log.Printf("skipping malformatted directory: %s\n", strippedT)
 				continue
 			}
 
