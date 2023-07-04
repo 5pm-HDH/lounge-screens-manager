@@ -305,7 +305,7 @@ func syncFromOneDrive() {
 
 	logCmd := exec.Cmd{
 		Path: rclonePath,
-		Args: []string{rclonePath, "sync", "/home/lsm/log", "onedrive:/lsm/log"},
+		Args: []string{rclonePath, "sync", "/home/lsm/log/", "onedrive:/lsm/log"},
 	}
 	// log.Printf("syncing from onedrive: %s", rcloneCmd.String())
 	if err := logCmd.Run(); err != nil {
