@@ -336,7 +336,7 @@ func scanConfigPath() {
 		} else if strings.HasSuffix(f, "log") {
 			continue
 		} else {
-			log.Printf("ignoring directory/file: %s\n", f)
+			// log.Printf("ignoring directory/file: %s\n", f)
 		}
 	}
 }
@@ -563,7 +563,7 @@ func parseOnceEntries(onceDir string) {
 			endTime, _ := time.Parse("2006-01-02 15", day+" "+timeRangeParts[1])
 
 			if endTime.Before(time.Now()) {
-				log.Printf("skipping past event: %s\n", endTime.Format(time.RFC3339))
+				// log.Printf("skipping past event: %s\n", endTime.Format(time.RFC3339))
 				continue
 			}
 
