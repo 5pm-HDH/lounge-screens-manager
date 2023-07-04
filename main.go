@@ -136,7 +136,7 @@ func main() {
 	configPath = os.Getenv("ONEDRIVE_PATH")
 
 	now := time.Now()
-	f, err := os.OpenFile(fmt.Sprintf("%s../log/%s_%s.log", configPath, now.Format(time.DateOnly), strings.ReplaceAll(now.Format(time.TimeOnly), ":", "-")), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+	f, err := os.OpenFile(fmt.Sprintf("/home/lsm/log/%s_%s.log", now.Format(time.DateOnly), strings.ReplaceAll(now.Format(time.TimeOnly), ":", "-")), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
 		log.Panicln(err)
 	}
@@ -305,7 +305,7 @@ func syncFromOneDrive() {
 
 	logCmd := exec.Cmd{
 		Path: rclonePath,
-		Args: []string{rclonePath, "sync", configPath + "../log", "onedrive:/lsm/log"},
+		Args: []string{rclonePath, "sync", "/home/lsm/log", "onedrive:/lsm/log"},
 	}
 	// log.Printf("syncing from onedrive: %s", rcloneCmd.String())
 	if err := logCmd.Run(); err != nil {
