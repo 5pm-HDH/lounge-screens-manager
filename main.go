@@ -244,7 +244,7 @@ func switchMonitors(desiredState int) error {
 		return err
 	}
 
-	log.Printf("toggle response: %v - desired state: %d\n", switchResp, desiredState)
+	// log.Printf("toggle response: %v - desired state: %d\n", switchResp, desiredState)
 
 	if switchResp.Result.Error != 0 {
 		return fmt.Errorf("failed to toggle switch: %d\n", switchResp.Result.Error)
@@ -457,6 +457,10 @@ func mediaDirectoryToPlaylist(mediaDir string) (playlist []*PlaylistItem) {
 		} else if bannerPictureFileExpression.MatchString(m) {
 			outPath := m + ".mosaic.jpg"
 			dur := bannerPictureFileExpression.FindStringSubmatch(m)[1]
+			if dur == "" || len(dur) == 0 {
+				dur = "30"
+				log.Printf("missing display duration, reverting to default 30 seconds: %s", m)
+			}
 			exists := false
 			if _, err := os.Stat(outPath); err == nil {
 				exists = true
@@ -490,6 +494,10 @@ func mediaDirectoryToPlaylist(mediaDir string) (playlist []*PlaylistItem) {
 		} else if pictureFileExpression.MatchString(m) {
 			outPath := m + ".mosaic.jpg"
 			dur := pictureFileExpression.FindStringSubmatch(m)[1]
+			if dur == "" || len(dur) == 0 {
+				dur = "30"
+				log.Printf("missing display duration, reverting to default 30 seconds: %s", m)
+			}
 			exists := false
 			if _, err := os.Stat(outPath); err == nil {
 				exists = true
